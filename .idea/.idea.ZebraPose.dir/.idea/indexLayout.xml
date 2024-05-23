@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="UserContentModel">
+    <attachedFolders />
+    <explicitIncludes />
+    <explicitExcludes>
+      <Path>BOP ROOT</Path>
+      <Path>Binary_Code_GT_Generator/Generate_Mesh_with_GT_Color</Path>
+      <Path>evaluation</Path>
+    </explicitExcludes>
+  </component>
+</project>
