@@ -12,7 +12,7 @@ from bop_toolkit_lib import misc
 ################################################################################
 p = {
   # See dataset_params.py for options.
-  'dataset': 'marker',
+  'dataset': 'laryngoscope',
 
   # Type of input object models.
   'model_type': None,

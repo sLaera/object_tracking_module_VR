@@ -200,7 +200,7 @@ def get_final_Bbox(Bbox, resize_method, max_x, max_y):
     return Bbox
 
 
-class bop_dataset_single_obj_pytorch(Dataset):
+class bop_dataset_single_obj_pytorch_ORIGINAL(Dataset):
     def __init__(self, dataset_dir, data_folder, rgb_files, mask_files, mask_visib_files, gts, gt_infos, cam_params,
                  is_train, crop_size_img, crop_size_gt, GT_code_infos, padding_ratio=1.5, resize_method="crop_resize",
                  use_peper_salt=False, use_motion_blur=False, Detect_Bbox=None, sym_aware_training=False):
@@ -333,6 +333,9 @@ class bop_dataset_single_obj_pytorch(Dataset):
         # for single obj, only one gt
         return roi_x, roi_entire_mask, roi_mask, R, t, Bbox, class_code_images, cam_param
 
+    def getvisib_fract(self, index):
+        return self.gt_infos[index]['visib_fract']
+
     def visulize(self, x, entire_mask, mask, GT_img_visible, GT_img_invisible, Bbox):
         cv2.namedWindow('rgb', cv2.WINDOW_NORMAL)
         cv2.namedWindow('mask', cv2.WINDOW_NORMAL)
@@ -375,3 +378,40 @@ class bop_dataset_single_obj_pytorch(Dataset):
             x = augmentations.augment_image(x)
 
         return x
+
+
+def filter_low_visib_fact(original_dataset, i, sum):
+    visib_fract = original_dataset.getvisib_fract(i)
+    if visib_fract <= 0.3:
+        sum[0]+=1
+    return visib_fract > 0.3
+
+class bop_dataset_single_obj_pytorch(bop_dataset_single_obj_pytorch_ORIGINAL):
+    def __init__(self, dataset_dir, data_folder, rgb_files, mask_files, mask_visib_files, gts, gt_infos, cam_params,
+                 is_train, crop_size_img, crop_size_gt, GT_code_infos, padding_ratio=1.5, resize_method="crop_resize",
+                 use_peper_salt=False, use_motion_blur=False, Detect_Bbox=None, sym_aware_training=False):
+        """
+        Args:
+            original_dataset (Dataset): The original dataset.
+            condition_func (function): A function that takes a sample and returns True if it meets the condition.
+        """
+        #this dataset is a wrapper of the ORIGINAL one with a filter non the visibility factor
+        original_dataset = bop_dataset_single_obj_pytorch_ORIGINAL(
+            dataset_dir, data_folder, rgb_files, mask_files, mask_visib_files, gts, gt_infos, cam_params,
+            is_train, crop_size_img, crop_size_gt, GT_code_infos, padding_ratio, resize_method,
+            use_peper_salt, use_motion_blur, Detect_Bbox, sym_aware_training
+        )
+        self.original_dataset = original_dataset
+        self.condition_func = filter_low_visib_fact
+        
+        # Filter the indices based on the condition function
+        sum = [0]
+        self.filtered_indices = [i for i in range(len(original_dataset)) if self.condition_func(original_dataset, i, sum)]
+        print(f"num of skiped samples:{sum[0]}")
+
+    def __len__(self):
+        return len(self.filtered_indices)
+
+    def __getitem__(self, idx):
+        original_idx = self.filtered_indices[idx]
+        return self.original_dataset[original_idx]

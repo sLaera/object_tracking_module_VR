@@ -163,7 +163,6 @@ cython_debug/
 /SynteticDatasetGeneration/datasets
 /evaluation
 /experiments
-/zebrapose/datasets
 /zebrapose/runs
 /Binary_Code_GT_Generator/Render_GT_Color_Mesh_to_GT_Img/render_related_source/glad
 
@@ -174,3 +173,8 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+/YOLOdatasets/
+/SynteticDatasetGeneration/dataset/
+/zebrapose/laryngoscope/
+/SynteticDatasetGeneration/testset/
+/SynteticDatasetGeneration/testset_new/
