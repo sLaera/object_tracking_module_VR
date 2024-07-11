@@ -1,0 +1,81 @@
+#### training dataset
+##for ycbv, bop_challange = False during the training
+bop_challange = False
+bop_path = ../BOP ROOT
+dataset_name = laryngoscope
+training_data_folder = train
+training_data_folder_2 = none
+val_folder = train
+test_folder = train
+second_dataset_ratio = 0.875
+num_workers = 8
+train_obj_visible_theshold = 0.2
+####
+
+
+#### network settings
+BoundingBox_CropSize_image = 256
+BoundingBox_CropSize_GT = 128
+
+BinaryCode_Loss_Type = BCE
+mask_binary_code_loss = True 
+predict_entire_mask = False
+
+use_histgramm_weighted_binary_loss = True
+
+output_kernel_size = 1
+
+resnet_layer = 34
+concat_encoder_decoder = True
+
+efficientnet_key = b4
+####
+
+
+#### check points
+load_checkpoint=False
+check_point_path=../experiments/checkpoints/
+tensorboard_path=../experiments/tensorboard_logs/runs/
+####
+
+####load from pretrained model (this will load the weight of a pretrained network, used for fine tuning or transfer learning)
+load_pretrained=True
+pretrained_path = ../pretrained/large_marker/0_1636step572000
+####
+
+####freeze some layer of the network
+freeze = True
+n_layer_multyplayer = 0.67
+####
+
+###split
+split_train_dataset = True
+split_ratio_train = 0.997
+####
+
+#### optimizer
+optimizer_type = Adam
+learning_rate = 0.0002
+batch_size = 8
+total_iteration = 120000
+
+binary_loss_weight = 3
+#### 
+
+###cuda
+device_cuda_number = 1
+
+
+#### augmentations
+#Detection_reaults = detection_results/ycbv/fcos_V57eSE_MSx1333_ColorAugAAEWeaker_8e_ycbv_real_pbr_8e_test_keyframe.json
+Detection_reaults = none
+
+padding_ratio = 1.5
+resize_method = crop_square_resize  
+
+use_peper_salt= False
+use_motion_blur= False
+
+###binary coding settings
+divide_number_each_itration = 2
+number_of_itration = 16

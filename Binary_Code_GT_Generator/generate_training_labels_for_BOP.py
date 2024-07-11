@@ -32,8 +32,8 @@ def generate_GT_images(bop_path, dataset_name, force_rewrite, is_training_data, 
     print(camera_parameters)
 
     Render.init(camera_parameters, 1)
-    model_scale = 10
-
+    model_scale = 0.1
+    
     for model_to_render in range(start_obj_id, end_obj_id):
         # only bind 1 model each time
         model_to_render = int(model_to_render)

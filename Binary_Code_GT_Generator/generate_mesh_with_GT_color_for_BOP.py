@@ -20,7 +20,7 @@ def generate_meshs(bop_path, dataset_name, divide_number_each_iteration, number_
         obj_id = mesh_fname[4:-4]
         txt_fname = txt_fname + obj_id + ".txt"
 
-        mesh_fn_write = dataset_dir + "/models_GT_color/" + mesh_fname    
+        mesh_fn_write = dataset_dir + "/models_GT_color/" + mesh_fname
         txt_fname = dataset_dir + "/models_GT_color/" + txt_fname
 
         executable = "'{}' '{}' '{}' '{}' '{}' '{}'".format(executable_path, divide_number_each_iteration, number_of_itration, orginal_mesh, txt_fname, mesh_fn_write)

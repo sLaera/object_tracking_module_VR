@@ -5,8 +5,18 @@
     <explicitIncludes />
     <explicitExcludes>
       <Path>BOP ROOT</Path>
+      <Path>BOP ROOT LIGHT</Path>
       <Path>Binary_Code_GT_Generator/Generate_Mesh_with_GT_Color</Path>
+      <Path>SynteticDatasetGeneration/dataset</Path>
+      <Path>SynteticDatasetGeneration/datasets</Path>
+      <Path>SynteticDatasetGeneration/env</Path>
+      <Path>SynteticDatasetGeneration/testset</Path>
+      <Path>SynteticDatasetGeneration/testset_new</Path>
+      <Path>YOLOdatasets</Path>
       <Path>evaluation</Path>
+      <Path>experiments</Path>
+      <Path>venv</Path>
+      <Path>ysu</Path>
     </explicitExcludes>
   </component>
 </project>
