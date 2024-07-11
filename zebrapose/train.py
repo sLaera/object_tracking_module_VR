@@ -2,6 +2,8 @@ import os
 import pdb
 import sys
 
+import cv2
+
 sys.path.insert(0, os.getcwd())
 
 from config_parser import parse_cfg
@@ -23,6 +25,7 @@ from model.BinaryCodeNet import BinaryCodeNet_Deeplab
 from model.BinaryCodeNet import MaskLoss, BinaryCodeLoss
 
 from torch.utils.tensorboard import SummaryWriter
+from torcheval.metrics.functional import r2_score
 
 from utils import save_checkpoint, get_checkpoint, save_best_checkpoint
 from metric import Calculate_ADD_Error_BOP, Calculate_ADI_Error_BOP
@@ -32,11 +35,12 @@ from get_detection_results import get_detection_results, ycbv_select_keyframe
 from common_ops import from_output_to_class_mask, from_output_to_class_binary_code, get_batch_size
 
 from test_network_with_test_data import test_network_with_single_obj
+from scipy.spatial.transform import Rotation as R
 
 
 # freeze the given number of layers of the given model
 # freeze the given number of layers of the given model
-def freeze(model, n=None):
+def freeze_layers(model, n=None):
     """
     this function freezes the given number of layers of the given model in order to fine-tune it.
     :param model: the model to be frozen
@@ -62,6 +66,25 @@ def count_parameters(model):
     print("Total number of parameters: {}.".format(total_params))
     return total_params
 
+def invert_class_id_image(class_id_image):
+    B = np.right_shift(class_id_image, 16) & 0xFF
+    G = np.right_shift(class_id_image, 8) & 0xFF
+    R = class_id_image & 0xFF
+    BGR_image = np.stack((B, G, R), axis=-1)
+    BGR_image = BGR_image.astype(np.uint8)
+    return BGR_image
+
+def normalize_array(arr, min_val, max_val):
+    # Ensure the array is a numpy array
+    arr = np.array(arr, dtype=float)
+    
+    # Map the array to the range [0, 1]
+    normalized_arr = (arr - min_val) / (max_val - min_val)
+    
+    return normalized_arr
+
+def mean_square_error(true, pred):
+    return np.mean((true - pred) ** 2)
 
 def main(configs):
     print("______________________get config____________________________")
@@ -96,6 +119,41 @@ def main(configs):
     tensorboard_path = configs['tensorboard_path']
     check_point_path = configs['check_point_path']
     total_iteration = configs['total_iteration']  # train how many steps
+    #### transfer learning
+    if 'load_pretrained' in configs:
+        load_pretrained = configs['load_pretrained']
+    else:
+        load_pretrained = False
+    if 'pretrained_path' in configs:
+        pretrained_path = configs['pretrained_path']
+    else:
+        pretrained_path = 'None'
+    if 'freeze' in configs:
+        freeze = configs['freeze']
+    else:
+        freeze = False
+    if 'n_layer_multyplayer' in configs:
+        n_layer_multyplayer = configs['n_layer_multyplayer']
+    else:
+        n_layer_multyplayer = 0
+    ####split
+    if 'split_train_dataset' in configs:
+        split_train_dataset = configs['split_train_dataset']
+    else:
+        split_train_dataset = False
+    if 'split_ratio_train' in configs:
+        split_ratio_train = configs['split_ratio_train']
+    else:
+        split_ratio_train = 1
+    ###reduce semples
+    if 'reduce_samples' in configs:
+        reduce_samples = configs['reduce_samples']
+    else:
+        reduce_samples = False
+    if 'num_samples_train' in configs:
+        num_samples_train = configs['num_samples_train']
+    else:
+        num_samples_train = 0
     #### optimizer
     optimizer_type = configs['optimizer_type']  # Adam is the best sofar
     batch_size = configs['batch_size']  # 32 is the best so far, set to 16 for debug in local machine
@@ -180,51 +238,69 @@ def main(configs):
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
                                                    num_workers=num_workers, drop_last=True)
 
-    # define test data loader
-    if not bop_challange:
-        dataset_dir_test, _, _, _, _, test_rgb_files, _, test_mask_files, test_mask_visib_files, test_gts, test_gt_infos, _, camera_params_test = bop_io.get_dataset(
-            bop_path, dataset_name, train=False, data_folder=val_folder, data_per_obj=True, incl_param=True,
-            train_obj_visible_theshold=train_obj_visible_theshold)
-        if dataset_name == 'ycbv':
-            print("select key frames from ycbv test images")
-            key_frame_index = ycbv_select_keyframe(Detection_reaults, test_rgb_files[obj_id])
-            test_rgb_files_keyframe = [test_rgb_files[obj_id][i] for i in key_frame_index]
-            test_mask_files_keyframe = [test_mask_files[obj_id][i] for i in key_frame_index]
-            test_mask_visib_files_keyframe = [test_mask_visib_files[obj_id][i] for i in key_frame_index]
-            test_gts_keyframe = [test_gts[obj_id][i] for i in key_frame_index]
-            test_gt_infos_keyframe = [test_gt_infos[obj_id][i] for i in key_frame_index]
-            camera_params_test_keyframe = [camera_params_test[obj_id][i] for i in key_frame_index]
-            test_rgb_files[obj_id] = test_rgb_files_keyframe
-            test_mask_files[obj_id] = test_mask_files_keyframe
-            test_mask_visib_files[obj_id] = test_mask_visib_files_keyframe
-            test_gts[obj_id] = test_gts_keyframe
-            test_gt_infos[obj_id] = test_gt_infos_keyframe
-            camera_params_test[obj_id] = camera_params_test_keyframe
-    else:
-        dataset_dir_test, _, _, _, _, test_rgb_files, _, test_mask_files, test_mask_visib_files, test_gts, test_gt_infos, _, camera_params_test = bop_io.get_bop_challange_test_data(
-            bop_path, dataset_name, target_obj_id=obj_id + 1, data_folder=val_folder)
-    print('test_rgb_file exsample', test_rgb_files[obj_id][0])
-
-    if Detection_reaults != 'none':
-        Det_Bbox = get_detection_results(Detection_reaults, test_rgb_files[obj_id], obj_id + 1, 0)
-    else:
-        Det_Bbox = None
-
-    test_dataset = bop_dataset_single_obj_pytorch(
-        dataset_dir_test, val_folder, test_rgb_files[obj_id], test_mask_files[obj_id], test_mask_visib_files[obj_id],
-        test_gts[obj_id], test_gt_infos[obj_id], camera_params_test[obj_id], False,
-        BoundingBox_CropSize_image, BoundingBox_CropSize_GT, GT_code_infos,
-        padding_ratio=padding_ratio, resize_method=resize_method, Detect_Bbox=Det_Bbox,
-        use_peper_salt=use_peper_salt, use_motion_blur=use_motion_blur, sym_aware_training=sym_aware_training
-    )
-
-    print("number of test images: ", len(test_dataset), flush=True)
     batch_size_test = batch_size
     if training_data_folder_2 != 'none':
-        batch_size_test = batch_size_1_dataset
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False,
-                                              num_workers=num_workers)
+            batch_size_test = batch_size_1_dataset
+    batch_size_test = int(batch_size_test / 2)
+    if batch_size_test < 1:
+        batch_size_test = 1
+    # define test data loader
+    if not split_train_dataset:
+        if not bop_challange:
+            dataset_dir_test, _, _, _, _, test_rgb_files, _, test_mask_files, test_mask_visib_files, test_gts, test_gt_infos, _, camera_params_test = bop_io.get_dataset(
+                bop_path, dataset_name, train=False, data_folder=val_folder, data_per_obj=True, incl_param=True,
+                train_obj_visible_theshold=train_obj_visible_theshold)
+            if dataset_name == 'ycbv' and Detection_reaults != 'none':
+                print("select key frames from ycbv test images")
+                key_frame_index = ycbv_select_keyframe(Detection_reaults, test_rgb_files[obj_id])
+                test_rgb_files_keyframe = [test_rgb_files[obj_id][i] for i in key_frame_index]
+                test_mask_files_keyframe = [test_mask_files[obj_id][i] for i in key_frame_index]
+                test_mask_visib_files_keyframe = [test_mask_visib_files[obj_id][i] for i in key_frame_index]
+                test_gts_keyframe = [test_gts[obj_id][i] for i in key_frame_index]
+                test_gt_infos_keyframe = [test_gt_infos[obj_id][i] for i in key_frame_index]
+                camera_params_test_keyframe = [camera_params_test[obj_id][i] for i in key_frame_index]
+                test_rgb_files[obj_id] = test_rgb_files_keyframe
+                test_mask_files[obj_id] = test_mask_files_keyframe
+                test_mask_visib_files[obj_id] = test_mask_visib_files_keyframe
+                test_gts[obj_id] = test_gts_keyframe
+                test_gt_infos[obj_id] = test_gt_infos_keyframe
+                camera_params_test[obj_id] = camera_params_test_keyframe
+        else:
+            dataset_dir_test, _, _, _, _, test_rgb_files, _, test_mask_files, test_mask_visib_files, test_gts, test_gt_infos, _, camera_params_test = bop_io.get_bop_challange_test_data(
+                bop_path, dataset_name, target_obj_id=obj_id + 1, data_folder=val_folder)
+        print('test_rgb_file exsample', test_rgb_files[obj_id][0])
 
+        if Detection_reaults != 'none':
+            Det_Bbox = get_detection_results(Detection_reaults, test_rgb_files[obj_id], obj_id + 1, 0)
+        else:
+            Det_Bbox = None
+
+        test_dataset = bop_dataset_single_obj_pytorch(
+            dataset_dir_test, val_folder, test_rgb_files[obj_id], test_mask_files[obj_id], test_mask_visib_files[obj_id],
+            test_gts[obj_id], test_gt_infos[obj_id], camera_params_test[obj_id], False,
+            BoundingBox_CropSize_image, BoundingBox_CropSize_GT, GT_code_infos,
+            padding_ratio=padding_ratio, resize_method=resize_method, Detect_Bbox=Det_Bbox,
+            use_peper_salt=use_peper_salt, use_motion_blur=use_motion_blur, sym_aware_training=sym_aware_training
+        )
+
+        print("number of test images: ", len(test_dataset), flush=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False,
+                                                num_workers=num_workers)
+    else:
+        #split the train set in test and train
+        train_size = int(float(split_ratio_train) * len(train_dataset))
+        test_size = int(len(train_dataset) - train_size)
+        train_dataset, test_dataset = torch.utils.data.random_split(train_dataset, [train_size, test_size])
+        ##reduce samples
+        if reduce_samples:
+            indices = list(range(num_samples_train))
+            train_dataset = torch.utils.data.Subset(train_dataset, indices)
+        ##
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True,
+                                                   num_workers=num_workers, drop_last=True)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False,
+                                                num_workers=num_workers)
+          
     #############build the network 
     print("______________________build the network __________________________")
     binary_code_length = number_of_itration
@@ -239,8 +315,6 @@ def main(configs):
         output_kernel_size=output_kernel_size,
         efficientnet_key=efficientnet_key
     )
-
-    freeze(net, count_parameters(net)*(1/3))
     
     maskLoss = MaskLoss()
     binarycode_loss = BinaryCodeLoss(BinaryCode_Loss_Type, mask_binary_code_loss, divide_number_each_itration,
@@ -258,6 +332,11 @@ def main(configs):
         optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9)
     elif optimizer_type == 'Adam':
         optimizer = optim.Adam(net.parameters(), lr=learning_rate)
+        lr = optimizer.param_groups[0]['lr']
+        betas = optimizer.param_groups[0]['betas']
+        eps = optimizer.param_groups[0]['eps']
+        weight_decay = optimizer.param_groups[0]['weight_decay']
+        print(lr,betas,eps,weight_decay)
     else:
         raise NotImplementedError(f"unknown optimizer type: {optimizer_type}")
 
@@ -272,6 +351,15 @@ def main(configs):
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         best_score = checkpoint['best_score']
         iteration_step = checkpoint['iteration_step']
+    elif load_pretrained:
+        checkpoint = torch.load(pretrained_path)
+        net.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+    if freeze:
+        num_param_to_freeze = count_parameters(net) * float(n_layer_multyplayer)
+        freeze_layers(net, int(num_param_to_freeze))
+        
 
     print("______________________Start training__________________________")
     # train the network
@@ -280,6 +368,22 @@ def main(configs):
         for batch_idx, (data, entire_masks, masks, Rs, ts, Bboxes, class_code_images, cam_Ks) in enumerate(
                 train_loader):
             # if multiple training sets, get data from the second set
+            
+            '''data_img = data[0].numpy()
+            data_img = normalize_array(data_img, data_img.min(), data_img.max())
+            data_img = data_img*255
+            data_img = data_img.astype(np.uint8)
+            data_img = np.transpose(data_img, (1, 2, 0))
+            cv2.imwrite("images/RGB.png", data_img)
+
+            code_img = class_code_images[0].numpy().astype(np.uint8)
+            height, width = code_img.shape[1], code_img.shape[2]
+            image_16bit = np.zeros((height, width), dtype=np.uint16)
+            for i in range(16):
+                code_img_to_save = code_img[i]*255
+                code_img_to_save = code_img_to_save.astype(np.uint8)
+                cv2.imwrite(f"images/codes_{i}.png", code_img_to_save)'''
+
             if training_data_folder_2 != 'none':
                 try:
                     data_2, entire_masks_2, masks_2, Rs_2, ts_2, Bboxes_2, class_code_images_2, cam_Ks_2 = next(
@@ -309,6 +413,21 @@ def main(configs):
                 raise ValueError(f"batch size wrong")
             pred_mask_prob, pred_code_prob = net(data)
 
+            '''code_img = pred_code_prob[0].detach().cpu().numpy().astype(np.uint8)
+            height, width = code_img.shape[1], code_img.shape[2]
+            image_16bit = np.zeros((height, width), dtype=np.uint16)
+            for i in range(16):
+                code_img_to_save = code_img[i]*255
+                code_img_to_save = code_img_to_save.astype(np.uint8)
+                cv2.imwrite(f"images/codes_PRED_{i}.png", code_img_to_save)
+                predProp = pred_mask_prob[0][0].detach().cpu().numpy().astype(np.uint8)
+                predProp = normalize_array(predProp, predProp.min(), predProp.max())
+                predProp = -(predProp - 1) * 255
+                cv2.imwrite(f"images/codes_MASK_{i}.png", predProp)
+            pdb.set_trace()'''
+
+            #cv2.imwrite("pred_codes.png", invert_class_id_image(pred_code_prob[0].cpu()))
+            #pdb.set_trace()
             # loss for predicted binary coding
             pred_mask_for_loss = from_output_to_class_mask(pred_mask_prob)
             pred_mask_for_loss = torch.tensor(pred_mask_for_loss).cuda()
@@ -321,6 +440,13 @@ def main(configs):
                 loss_m = maskLoss(pred_mask_prob, masks)
 
             loss = binary_loss_weight * loss_b + loss_m
+            #--r2 score---
+            mask_hard  = pred_mask_for_loss.round().clamp(0,1) # still kept round and clamp for safety
+            code_pred_hard = torch.sigmoid(pred_code_prob).round().clamp(0,1)
+            code_pred_hard = code_pred_hard * mask_hard
+            code_GT_hard = class_code_images.round().clamp(0,1) # still kept round and clamp for safety
+            code_GT_hard = code_GT_hard * mask_hard
+            r_2 = r2_score(torch.flatten(code_pred_hard), torch.flatten(code_GT_hard))
 
             loss.backward()
             optimizer.step()
@@ -335,6 +461,7 @@ def main(configs):
             writer.add_scalar('Loss/training loss total', loss, iteration_step)
             writer.add_scalar('Loss/training loss mask', loss_m, iteration_step)
             writer.add_scalar('Loss/training loss binary code', loss_b, iteration_step)
+            writer.add_scalar('Loss/R2', r_2, iteration_step)
 
             # test the trained CNN
             log_freq = 1000
@@ -364,6 +491,18 @@ def main(configs):
                 ADD_passed = np.zeros(batch_size)
                 ADD_error = np.zeros(batch_size)
 
+                ERROR_GT_R = np.zeros(batch_size)
+                ERROR_GT_T = np.zeros(batch_size)
+                ERROR_GT_T_X = np.zeros(batch_size)
+                ERROR_GT_T_Y = np.zeros(batch_size)
+                ERROR_GT_T_Z = np.zeros(batch_size)
+                ERROR_R = np.zeros(batch_size)
+                ERROR_T = np.zeros(batch_size)
+                ERROR_T_X = np.zeros(batch_size)
+                ERROR_T_Y = np.zeros(batch_size)
+                ERROR_T_Z = np.zeros(batch_size)
+                n_errors = 0
+                n_errors_GT = 0
                 for counter, (r_GT, t_GT, Bbox, cam_K) in enumerate(zip(Rs, ts, Bboxes, cam_Ks)):
                     R_predict, t_predict, success = CNN_outputs_to_object_pose(pred_masks[counter],
                                                                                pred_codes[counter],
@@ -372,6 +511,82 @@ def main(configs):
                                                                                divide_number_each_itration,
                                                                                dict_class_id_3D_points,
                                                                                intrinsic_matrix=cam_K)
+
+                    R_GT_calculated, t_GT_calculated, success_GT = CNN_outputs_to_object_pose(masks[counter].detach().cpu().numpy().astype(np.uint8), np.transpose(class_code_images[counter].detach().cpu().numpy().astype(np.uint8), (1, 2, 0)), 
+                                                                            Bbox, BoundingBox_CropSize_GT, divide_number_each_itration, dict_class_id_3D_points, 
+                                                                            intrinsic_matrix=cam_K)
+                    
+                    
+                    
+
+                    #Test matrix transform
+                    GT_matrix = np.hstack((r_GT, t_GT))
+                    GT_matrix = np.vstack((GT_matrix,[0,0,0,1]))
+                    scale = np.eye(4,4) * (1/0.022334)
+                    GT_matrix = scale @ GT_matrix
+                    GT_matrix[2,3] *= -1
+                    r_GT = GT_matrix[:3, :3]
+                    t_GT =  GT_matrix[:3, 3]
+                    t_GT = t_GT.reshape(-1, 1)
+                    
+
+                    '''
+                    calc_matrix = np.hstack((R_GT_calculated, t_GT_calculated))
+                    calc_matrix = np.vstack((calc_matrix,[0,0,0,1]))
+                    print('GT')
+                    print(GT_matrix)
+                    print('calc')
+                    print(calc_matrix)
+                    print('diff')
+                    print(GT_matrix - calc_matrix)
+                    rotation_matrix = (GT_matrix - calc_matrix)[:3, :3]
+                    # Crea l'oggetto Rotation a partire dalla matrice di rotazione
+                    rotation = R.from_matrix(rotation_matrix)
+
+                    # Ottieni gli angoli di Eulero in radianti
+                    euler_angles_radians = rotation.as_euler('xyz', degrees=False)
+
+                    # Converti gli angoli di Eulero in gradi
+                    euler_angles_degrees = np.degrees(euler_angles_radians)
+
+                    # Stampa gli angoli di Eulero in gradi
+                    print("Angoli di Eulero in gradi:", euler_angles_degrees)
+                    pdb.set_trace()
+                    '''
+
+
+                    #ERROR_GT_R[counter] = mean_square_error(R_GT_calculated, R_predict)
+                    #ERROR_GT_T[counter] = mean_square_error(t_GT_calculated, t_predict)
+                    
+                    if not success_GT:
+                        n_errors_GT += 1
+                    if not success:
+                        n_errors += 1
+
+                    if success_GT and success:
+                        ERROR_GT_R[counter] = mean_square_error(R_GT_calculated, R_predict)
+                        ERROR_GT_T[counter] = mean_square_error(t_GT_calculated, t_predict)
+                        ERROR_GT_T_X[counter] = (t_GT_calculated[0,0] - t_predict[0,0]) ** 2
+                        ERROR_GT_T_Y[counter] = (t_GT_calculated[1,0] - t_predict[1,0]) ** 2
+                        ERROR_GT_T_Z[counter] = (t_GT_calculated[2,0] - t_predict[2,0]) ** 2
+
+                        ERROR_R[counter] = mean_square_error(r_GT, R_predict)
+                        ERROR_T[counter] = mean_square_error(t_GT, t_predict)
+                        ERROR_T_X[counter] = (t_GT[0,0] - t_predict[0,0]) ** 2
+                        ERROR_T_Y[counter] = (t_GT[1,0] - t_predict[1,0]) ** 2
+                        ERROR_T_Z[counter] = (t_GT[2,0] - t_predict[2,0]) ** 2
+                    else:
+                        ERROR_GT_R[counter] = 10000
+                        ERROR_GT_T[counter] = 10000
+                        ERROR_GT_T_X[counter] = 10000
+                        ERROR_GT_T_Y[counter] = 10000
+                        ERROR_GT_T_Z[counter] = 10000
+
+                        ERROR_R[counter] = 10000
+                        ERROR_T[counter] = 10000
+                        ERROR_T_X[counter] = 10000
+                        ERROR_T_Y[counter] = 10000
+                        ERROR_T_Z[counter] = 10000
 
                     add_error = 10000
                     if success:
@@ -388,29 +603,55 @@ def main(configs):
                 writer.add_scalar('TRAIN_ADD/ADD_Train', ADD_passed, iteration_step)
                 writer.add_scalar('TRAIN_ADD/ADD_Error_Train', ADD_error, iteration_step)
 
-                ADD_passed = test_network_with_single_obj(net, test_loader, obj_diameter, writer,
-                                                          dict_class_id_3D_points, vertices, iteration_step, configs, 0,
-                                                          calc_add_and_adi=False)
+                ERROR_GT_R = np.sqrt(np.mean(ERROR_GT_R))
+                ERROR_GT_T = np.sqrt(np.mean(ERROR_GT_T))
+                ERROR_GT_T_X = np.sqrt(np.mean(ERROR_GT_T_X))
+                ERROR_GT_T_Y = np.sqrt(np.mean(ERROR_GT_T_Y))
+                ERROR_GT_T_Z = np.sqrt(np.mean(ERROR_GT_T_Z))
+
+                ERROR_R = np.sqrt(np.mean(ERROR_R))
+                ERROR_T = np.sqrt(np.mean(ERROR_T))
+                ERROR_T_X = np.sqrt(np.mean(ERROR_T_X))
+                ERROR_T_Y = np.sqrt(np.mean(ERROR_T_Y))
+                ERROR_T_Z = np.sqrt(np.mean(ERROR_T_Z))
+
+
+                writer.add_scalar('TRAINGT/pyprogressivex/r_RMSE', ERROR_GT_R, iteration_step)
+                writer.add_scalar('TRAINGT/pyprogressivex/t_RMSE', ERROR_GT_T, iteration_step)
+                writer.add_scalar('TRAINGT/pyprogressivex/t_x_RMSE', ERROR_GT_T_X, iteration_step)
+                writer.add_scalar('TRAINGT/pyprogressivex/t_y_RMSE', ERROR_GT_T_Y, iteration_step)
+                writer.add_scalar('TRAINGT/pyprogressivex/t_z_RMSE', ERROR_GT_T_Z, iteration_step)
+
+                writer.add_scalar('TRAINGT/GT/r_RMSE', ERROR_R, iteration_step)
+                writer.add_scalar('TRAINGT/GT/t_RMSE', ERROR_T, iteration_step)
+                writer.add_scalar('TRAINGT/GT/t_x_RMSE', ERROR_T_X, iteration_step)
+                writer.add_scalar('TRAINGT/GT/t_y_RMSE', ERROR_T_Y, iteration_step)
+                writer.add_scalar('TRAINGT/GT/t_z_RMSE', ERROR_T_Z, iteration_step)
+                writer.add_scalar('TRAINGT/nerrorsGT', n_errors_GT, iteration_step)
+                writer.add_scalar('TRAINGT/nerrors', n_errors, iteration_step)
+
+                ADD_passed, ERROR_GT_R, ERROR_GT_T = test_network_with_single_obj(net, test_loader, obj_diameter, writer,
+                                                          dict_class_id_3D_points, vertices, iteration_step, configs,
+                                                          binarycode_loss, predict_entire_mask, maskLoss, binary_loss_weight,
+                                                          0, calc_add_and_adi=True)
                 print("ADD_passed", ADD_passed)
-                if ADD_passed >= best_score:
-                    best_score = ADD_passed
+                print("ERROR_GT_R", ERROR_GT_R)
+                print("ERROR_GT_T", ERROR_GT_T)
+                #EDIT:new best score calc
+                if ADD_passed + (1/(1+ERROR_GT_R)) + (1/(1+ERROR_GT_T)) >= best_score:
+                    best_score = ADD_passed + (1/(1+ERROR_GT_R)) + (1/(1+ERROR_GT_T))
                     print("best_score", best_score)
                     save_best_checkpoint(best_score_path, net, optimizer, best_score, iteration_step)
+                
+                '''if ADD_passed >= best_score:
+                    best_score = ADD_passed
+                    print("best_score", best_score)
+                    save_best_checkpoint(best_score_path, net, optimizer, best_score, iteration_step)'''
 
             iteration_step = iteration_step + 1
             if iteration_step >= total_iteration:
                 end_training = True
-                break
-
-            # ---liberare memoria---
-            # Dopo aver completato l'iterazione, libera la memoria GPU
-            del data
-            del entire_masks
-            del masks
-            del class_code_images
-
-            torch.cuda.empty_cache()
-            # ----------------------        
+                break      
 
         if end_training == True:
             print('end the training in iteration_step:', iteration_step)
@@ -450,4 +691,10 @@ if __name__ == "__main__":
     for key in configs:
         print(key, " : ", configs[key], flush=True)
 
-    main(configs)
+    if 'device_cuda_number' in configs:
+        device_cuda_number = configs['device_cuda_number']
+    else:
+        device_cuda_number = 0
+
+    with torch.cuda.device(device_cuda_number):
+        main(configs)

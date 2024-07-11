@@ -49,8 +49,11 @@ import base64
 
 import traceback
 
+from ultralytics import YOLO
+
 HOST = '127.0.0.1'
 PORT = 6543
+
 
 # freeze the given number of layers of the given model
 def freeze(model, n=None):
@@ -70,6 +73,7 @@ def freeze(model, n=None):
                 param.requires_grad = False
             count += 1
 
+
 def count_parameters(model, count_embedding=True):
     total_params = 0
     for param in model.parameters():
@@ -78,10 +82,12 @@ def count_parameters(model, count_embedding=True):
     print("Total number of parameters: {}.".format(total_params))
     return total_params
 
+
 def read_depth(path):
     depth = np.asarray(Image.open(path)).copy()
     depth = depth.astype(np.float64)
     return depth
+
 
 def convert_image_to_tensor(rgbImage):
     composed_transforms_img = transforms.Compose([
@@ -92,8 +98,29 @@ def convert_image_to_tensor(rgbImage):
     x_pil = Image.fromarray(np.uint8(rgbImage)).convert('RGB')
     return composed_transforms_img(x_pil)
 
+
+def add_box_to_image(image, bbox, conf):
+    position = (10, 30)  # Coordinate (x, y) della posizione del testo
+
+    # Imposta i parametri della scritta
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1
+    font_color = (255, 0, 0)  # BGR (Blu, Verde, Rosso)
+    thickness = 2
+    line_type = cv2.LINE_AA
+    x, y, w, h = bbox
+    cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+    image = cv2.flip(image, 1)
+
+    # Aggiungi la scritta all'immagine
+    cv2.putText(image, f"{conf:.2f}", position, font, font_scale, font_color, thickness, line_type)
+
+    return image
+
+
 def main(configs):
-    def process(plt_anim_frame):
+    def process(_b_box):
 
         ret, frame = cam.read()
         if not ret:
@@ -101,24 +128,40 @@ def main(configs):
             return
 
         # --------------------predict------------------------------------------------------------------
-        test_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # test_img = frame
+        # test_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        test_img = frame
         # black and white image
         '''test_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         gray_image = cv2.cvtColor(test_img, cv2.COLOR_BGR2GRAY)
         result_image = cv2.merge((gray_image, gray_image, gray_image))
         test_img = result_image'''
 
-        # find bbox
-        # per test questi bbox sono falsi
+        '''# per test questi bbox sono falsi
         b_box = [200, 40, 140, 140]
-        # test_img = cv2.cvtColor(cv2.imread("1.png", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
-        roi_x = get_roi(test_img, b_box, BoundingBox_CropSize_image, interpolation=cv2.INTER_LINEAR,
+        #test_img = cv2.cvtColor(cv2.imread("1.png", cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)'''
+
+        # find bbox
+        yolo_results = yolo.predict(test_img, device=0, max_det=10, conf=0.4)  # return a list of Results objects
+        conf = 0
+        if yolo_results[0].boxes:
+            box = max(yolo_results[0].boxes, key=lambda b: b.conf)
+            x, y, w, h = box.xywh.cpu().numpy()[0]
+            # convert x,y from center to left high position of bbox
+            x = x - w / 2
+            y = y - h / 2
+            _b_box = np.array([x, y, w, h]).astype(int)
+            conf = box.conf.cpu().numpy()[0]
+
+        roi_x = get_roi(test_img, _b_box, BoundingBox_CropSize_image, interpolation=cv2.INTER_LINEAR,
                         resize_method=resize_method)
+
+        test_img = add_box_to_image(test_img, _b_box, conf)
+
         # show_image("test", roi_x.copy())
-        x, y, w, h = b_box
-        cv2.rectangle(test_img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        cv2.imshow('camera', cv2.flip(test_img, 1))
+        cv2.imshow('camera', test_img)
+
+        if no_socket == "True":
+            return _b_box
 
         data = convert_image_to_tensor(roi_x).unsqueeze(0)
 
@@ -149,7 +192,7 @@ def main(configs):
 
         R_predict, t_predict, success = CNN_outputs_to_object_pose(pred_masks[0],
                                                                    pred_code_images[0],
-                                                                   b_box, BoundingBox_CropSize_GT,
+                                                                   _b_box, BoundingBox_CropSize_GT,
                                                                    divide_number_each_itration,
                                                                    dict_class_id_3D_points,
                                                                    intrinsic_matrix=cam_K)
@@ -176,6 +219,7 @@ def main(configs):
             mat_json = json.dumps(mat_json)
             conn.sendall(mat_json.encode('utf-8'))
 
+        return _b_box
         # update_plot(R, T.flatten(), test_img)  # T.flatten()
 
     # ---------- -------- ---------- ---------- ----------- ----------- ---------
@@ -190,6 +234,8 @@ def main(configs):
     concat = configs['concat_encoder_decoder']
     efficientnet_key = configs['efficientnet_key']
     resize_method = configs['resize_method']
+    yolo_pt = configs['yolo_pt']
+    no_socket = configs['no_socket']
 
     # pixel code settings
     divide_number_each_itration = configs['divide_number_each_itration']
@@ -225,6 +271,9 @@ def main(configs):
     print("predicted binary_code_length", binary_code_length)
     configs['binary_code_length'] = binary_code_length
 
+    # ------YOLO MODEL ---------
+    yolo = YOLO(yolo_pt)  # pretrained YOLOv8n model
+
     net = BinaryCodeNet_Deeplab(
         num_resnet_layers=resnet_layer,
         concat=concat,
@@ -233,11 +282,11 @@ def main(configs):
         output_kernel_size=output_kernel_size,
         efficientnet_key=efficientnet_key
     )
-    
+
     if torch.cuda.is_available():
         net = net.cuda()
 
-    checkpoint = torch.load(configs['checkpoint_file'])
+    checkpoint = torch.load(configs['checkpoint_file'], map_location=torch.device('cuda:0'))
     net.load_state_dict(checkpoint['model_state_dict'])
 
     net.eval()
@@ -245,23 +294,30 @@ def main(configs):
     cam = cv2.VideoCapture(0)
     cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            # Associa il socket all'indirizzo IP e alla porta definiti
-            s.bind((HOST, PORT))
-            # Metti il server in ascolto per una connessione in entrata
-            s.listen()
-            print("Server in ascolto...")
-            conn, addr = s.accept()
-            print('Connesso da:', addr)
-            while True:
-                process(None)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-        except Exception:
-            print(traceback.format_exc())
-        finally:
-            s.close()
+    b_box = [1, 1, 1, 1]
+    if no_socket and no_socket == "True":
+        while True:
+            b_box = process(b_box)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+    else:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                # Associa il socket all'indirizzo IP e alla porta definiti
+                s.bind((HOST, PORT))
+                # Metti il server in ascolto per una connessione in entrata
+                s.listen()
+                print("Server in ascolto...")
+                conn, addr = s.accept()
+                print('Connesso da:', addr)
+                while True:
+                    b_box = process(b_box)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
+            except Exception:
+                print(traceback.format_exc())
+            finally:
+                s.close()
 
     cam.release()
     cv2.destroyAllWindows()
@@ -272,6 +328,8 @@ if __name__ == "__main__":
     parser.add_argument('--cfg', type=str)  # config file
     parser.add_argument('--obj_name', type=str)
     parser.add_argument('--ckpt_file', type=str)
+    parser.add_argument('--yolo_pt', type=str)  # path to the trained yolo checkpoint 
+    parser.add_argument('--no_socket', type=str)
     args = parser.parse_args()
     config_file = args.cfg
     checkpoint_file = args.ckpt_file
@@ -279,8 +337,9 @@ if __name__ == "__main__":
     configs = parse_cfg(config_file)
 
     configs['obj_name'] = obj_name
-
     configs['checkpoint_file'] = checkpoint_file
+    configs['yolo_pt'] = args.yolo_pt
+    configs['no_socket'] = args.no_socket
 
     # print the configurations
     for key in configs:
