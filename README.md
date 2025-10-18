@@ -1,62 +1,191 @@
-# ZebraPose
+# Zebra Pose
 
-The implementation of the paper 'ZebraPose: Coarse to Fine Surface Encoding for 6DoF Object Pose Estimation' (CVPR2022). [`ArXiv`](https://arxiv.org/abs/2203.09418)
+[https://arxiv.org/abs/2203.09418](https://arxiv.org/abs/2203.09418)
 
-![pipeline](pic/zebrapose-method.png)
+code:[https://github.com/suyz526/ZebraPose?tab=readme-ov-file](https://github.com/suyz526/ZebraPose?tab=readme-ov-file)
 
-## System Requirement
-### Tested Environment
-- Ubuntu 18.04
-- CUDA 11.1
-- Python 3.6
+# Modifications to the original scripts
 
-### Main Dependencies:
-- [`bop_toolkit`](https://github.com/thodan/bop_toolkit)
-- Pytorch 1.10
-- torchvision 0.11.0
-- opencv-python
-- [`Progressive-X`](https://github.com/danini/progressive-x)
+In order to make the solution works on a windows machine with numpy > 1.21 some modifications where done to the code.
 
-Download with `git clone --recurse-submodules` so that `bop_toolkit` will also be cloned.
+The biggest one is the replace of float and int value type that are deprecated on the newer version of numpy.
 
-## Training with a dataset in BOP benchmark
-### Training data preparation
-1. Download the dataset from [`BOP benchmark`](https://bop.felk.cvut.cz/datasets/)
+Some other minor modifications where made to make sure the scripts works correctly with the provided configuration. Some of them consist of handle edge cases in case of path with spaces
 
-2. Download required ground truth folders of zebrapose from [`owncloud`](https://cloud.dfki.de/owncloud/index.php/s/zT7z7c3e666mJTW). The folders are `models_GT_color`, `XX_GT` (e.g. `train_real_GT` and `test_GT`) and `models` (`models` is optional, only if you want to generate GT from scratch).
+### Library installations
 
-3. The expected data structure: 
-    ```
-    .
-    └── BOP ROOT PATH/
-        ├── lmo   
-        ├── ycbv/
-        │   ├── models
-        │   ├── models_eval
-        │   ├── models_fine
-        │   ├── test
-        │   ├── train_pbr
-        │   ├── train_real
-        │   ├── ...               #(other files from BOP page)
-        │   ├── models_GT_color   #(from last step)
-        │   ├── train_pbr_GT      #(from last step)
-        │   ├── train_real_GT     #(from last step)
-        │   ├── test_GT           #(from last step)
-        │   ├── train_pbr_GT_v2   #(from last step, for symmetry aware training)
-        │   ├── train_real_GT_v2  #(from last step, for symmetry aware training)
-        │   └── test_GT_v2        #(from last step, for symmetry aware training)
-        └── tless
-    ```
+```bash
+sudo apt install libeigen3-dev
+sudo apt-get install libgflags-dev
+sudo apt-get -y install libgoogle-glog-dev
+sudo apt install libopencv-dev
+```
 
-4. Download the 3 [`pretrained resnet`](https://cloud.dfki.de/owncloud/index.php/s/zT7z7c3e666mJTW), save them under `zebrapose/pretrained_backbone/resnet`, and download `pretrained efficientnet` from "https://download.pytorch.org/models/efficientnet_b4_rwightman-7eb33cd5.pth", save it under `zebrapose/pretrained_backbone/efficientnet`
+# New Scripts
 
-5. (Optional) Instead of download the ground truth, you can also generate them from scratch, details in [`Generate_GT.md`](Binary_Code_GT_Generator/Generate_GT.md). 
+## Get camera calibration
+
+get_matrix_camlibration.py script is used to calibrate the camera, it search for a checkerboard and get the camera intrinsic matrix
+
+## On camera tracking script
+
+track_and_send.py is a new python script added to use the functions provided by the zpose library to run the tracking on the camera stream for the corresponded object.
+
+First of all this script gathers all the necessary configurations and build the network.
+
+After that a TCP server is created waiting for a connection from the client that will consume the tracking information.
+
+When the connection is established the selected camera will be activated and the tracking of the selected object will start on that stream. The tracking information are given to the client in an unsolicited manner, after the connection is established.
+
+to run the script use the following command (make sure to set all the configuration option correctly)
+
+```bash
+sudo python track_and_send.py --cfg config/custom_config/laryngoscope.txt --obj_name laryngoscope --ckpt_file ../experiments/checkpoints/ycbv_effnetb4/large_marker/best_score/0_1049step584000
+```
+
+# Setup
+
+Before using the solution the instructions on the main readme file should be followed to make sure that all the requirement are satisfied.
+
+To sum up the most important steps are:
+
+- Compile the bop toolkit library and the progressive-x library
+- After that, download the pretrained weights from the source indicated on the readme. It is not really necessary to download any dataset (if needed the best solution should be to download the YCBV dataset).
+- Compile the Binary_Code_GT_Generator following the readme on that folder
+
+## WSL configuration
+
+The solution work on linux, so WSL is used. Build WSL ubuntu to make it work with computer usb camera.
+
+### Setup the WSL
+
+- Install on windows **`usbipd-win`**  [https://github.com/dorssel/usbipd-win/wiki/WSL-support](https://github.com/dorssel/usbipd-win/wiki/WSL-support)
+- follow the steps in this repository to make the camera works on WSL: https://github.com/PINTO0309/wsl2_linux_kernel_usbcam_enable_conf
+
+### Activate camera on WSL
+
+search for usb devices:
+
+```powershell
+usbipd wsl list 
+```
+
+Find the usb devices associated to the camera and execute the code (replace <busID> with the founded id)
+
+```powershell
+usbipd attach --wsl --busid <busID>
+```
+
+After this operation the camera could be used by WSL but not by Windows. To de touch the camera from WSL use:
+
+```powershell
+usbipd detach --wsl --busid <busID>
+```
+
+### Opencv camera capture
+
+However, to make Opencv camera capture works a new instruction is needed:
+
+before opening the camera stream add the instruction:
+
+```python
+cam = cv2.VideoCapture(0)
+cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+```
+
+then 
+
+```python
+cam.read()
+```
+
+to capture a frame from the camera.
+
+Finally
+
+```python
+cam.release()
+```
+
+To release the camera
+
+# Synthetic data generation
+
+To train the model, synthetic data can be used.
+
+Several Blender files have been created to generate the required images for training and testing.
+
+In the `/syntheticDatasetGeneration` directory, the following Blender files are available:
+
+- `GenerateDataset.blend`
+- `GenerateDataset_NEW.blend`
+- `GenerateTestSet.blend`
+
+By opening these Blender files and executing the corresponding scripts, it is possible to automatically generate a series of images suitable for model training.
+
+Before running the scripts, make sure to **edit the first lines of the script** to set the appropriate parameters (e.g., output paths, number of samples, rendering options, etc.).
+
+Each Blender file produces slightly different results, due to variations in configuration and generation parameters.
+
+To generate dataset with a different model, import the 3D model in the blender file and rename it accordingly to the name of the main object already present in the file
+
+<img width="1225" height="1084" alt="image" src="https://github.com/user-attachments/assets/41bad029-d759-49c7-b5f4-790f18474db3" />
 
 
-### activate Venv
-`source venv/Scripts/activate`
+# Custom dataset
+
+The following points describes how to create a new dataset from scratch:
+
+- Preprocess the CAD model
+    - Scan the object or create a CAD model
+    - Create the .obj file and the ply file according to the readme Generate_GT and put them on the bop_root_folder/dataset_folder/models
+        - the names of the two files will be obj_{obj_id:06d} (es. obj_000001.ply)
+    - Create a camera.json file in bop_root_folder/dataset_folder, following the bop documentation, of a camera that will be use in simulations. (the simplest way is to copy the camera.json of another dataset)
+    - Generate the model_info.json:
+        - Edit the script `bop_toolkit/scripts/calc_model_info.py` . set the dataset and dataset_path params in the structure at line 13
+        - Edit the script `bop_toolkit/bop_toolkit_lib/dataset_params.py` : edit the structures `obj_ids`  and `symmetric_obj_ids` at line 75, add a new line with the dataset name and the list of objects ids
+        - Edit the file `zebrapose/tools_for_BOP/common_dataset_info.py` adding 2 structures (substitute `<dataset>` with the name of the dataset and `<object_name>` with the name of the object):
+            - `<dataset>_obj_name_obj_id = {'<object_name>':1}`
+            - `<dataset>_symmetry_obj = {'<object_name>':1}`
+            
+            edit the `get_obj_info` function at the end of the file adding the name of the dataset to the array in the check condition
+            
+        
+        Execute the script `python3 ../bop_toolkit/scripts/calc_model_info.py`
+        
+    - then run the `generate_mesh_with_GT_color_for_BOP.py` script accordingly to the documentation
+- Create the configuration file
+    - use as model the zebrapose/config/customconfig/laryngoscope.txt file
+- Create the images and labels
+    - Use the above-described method to generate the synthetic images
+    - Run the **ConvertToYoloFormat.py** to generate the labels to train the YOLO model
+- Use the python script file Generate_GT
+    
+    I’ve created a python script to generate the GT, this will render the model with GT colors generated in the previous steps. I’ve used Open3d as a renderer (for some reason Blender add a noise to the render so it could not be usable).
+    
+    On top of the file there are the configuration variables
+    
+    - add the path to the model of the model_GT_color
+    - Change the folder in the script with the name of the folder you want to get the information from
+    - Run the script `python Generate_GT.py`
+- [Alternative 1] Use the Blender file  `Generate_GT.blend` and run the script in the file
+    - This script doesn’t really work for me
+    
+- [Alternative 2] Run `generate_training_labels_for_BOP.py` script accordingly to the ZebraPose documentation
+
+### Example of GT image
+
+<img width="473" height="484" alt="image" src="https://github.com/user-attachments/assets/61eeca82-e33e-4219-a4a8-a96d3f4b8da6" />
+
+<img width="598" height="546" alt="image" src="https://github.com/user-attachments/assets/83e7ed9d-9dc4-438c-ae05-19899fe1d4e4" />
+
 
 ### Training
+
+#### activate Venv
+`source venv/Scripts/activate`
+
+### Run Script
 Adjust the paths in the config files, and train the network with `train.py`, e.g.
 
 `python train.py --cfg config/config_BOP/lmo/exp_lmo_BOP.txt --obj_name ape`
@@ -67,13 +196,7 @@ Adjust the paths in the config files, and train the network with `train.py`, e.g
 
 The script will save the last 3 checkpoints and the best checkpoint, as well as tensorboard log. To enable sym. aware training, with `--sym_aware_training True`
 
-## run script prova
-`sudo python3 prova.py --cfg config/config_BOP_effnet/ycbv/ycbv_BOP_effnet_train.txt --obj_name mug --ckpt_file ../experiments/checkpoints/ycbv_effnetb4/mug/best_score/0_6101step497000 --ignore_bit 0 --eval_output_path ../evaluation/BOP_effnet/ycbv/eval  `
-
-debug:
-`sudo python3 -m pdb prova.py --cfg config/config_BOP_effnet/ycbv/ycbv_BOP_effnet_train.txt --obj_name mug --ckpt_file ../experiments/checkpoints/ycbv_effnetb4/mug/best_score/0_6101step497000 --ignore_bit 0 --eval_output_path ../evaluation/BOP_effnet/ycbv/eval  `
-
-## run script track and send
+## Run script track and send
 `sudo python track_and_send.py --cfg config/config_BOP_effnet/ycbv/ycbv_BOP_effnet_train.txt --obj_name large_marker --ckpt_file ../experiments/checkpoints/ycbv_effnetb4/large_marker/best_score/0_1049step584000`
 
 ## Test with trained model
@@ -91,34 +214,3 @@ For datasets like tless, the number of a a specific object is unknown in the tes
 
 To use ICP for refinement, use `--use_icp True`
 
-Download our trained model from this [`link`](https://cloud.dfki.de/owncloud/index.php/s/EmQDWgd5ipbdw3E). The ProgressiveX can not set random seed in its python API. The ADD results can be +/- 0.5%.
-
-## Evaluate for BOP challange 
-Merge the `.csv` files generated in the last step using `tools_for_BOP/merge_csv.py`, e.g.
-
-`python merge_csv.py --input_dir /dir/to/pose_result_bop/lmo --output_fn zebrapose_lmo-test.csv` 
-
-And then evaluate it according to [`bop_toolkit`](https://github.com/thodan/bop_toolkit)
-
-
-## Difference between ArXiv v1 and v2
-The results were reported with the same checkpoints. We fixed a bug that only influence the inference results: 
-
-The PnP solver requires the Bbox size to calculate the 2D pixel location in the original image. We modified the Bbox size in the dataloader. The bug is that we didn't update this modification for the PnP solver. If you remove the `get_final_Bbox` in the dataloader, you will get the results reported in v1. 
-
-The bug has more influence if we resize the Bbox using `crop_square_resize`. After we fixed the bug, we used `crop_square_resize` for BOP challange (instead of `crop_resize` in the config files in config_paper). We think this resize method should work better since it will not introduce distortion. However, we didn't compare resize methods with experiments.
-
-
-## Acknowledgement
-The original code has been developed together with [`Mahdi Saleh`](https://github.com/mahdi-slh). Some code are adapted from [`Pix2Pose`](https://github.com/kirumang/Pix2Pose), [`SingleShotPose`](https://github.com/microsoft/singleshotpose), [`GDR-Net`](https://github.com/THU-DA-6D-Pose-Group/GDR-Net), and [`Deeplabv3`]().
-
-
-## Citation
-```
-@article{su2022zebrapose,
-  title={ZebraPose: Coarse to Fine Surface Encoding for 6DoF Object Pose Estimation},
-  author={Su, Yongzhi and Saleh, Mahdi and Fetzer, Torben and Rambach, Jason and Navab, Nassir and Busam, Benjamin and Stricker, Didier and Tombari, Federico},
-  journal={arXiv preprint arXiv:2203.09418},
-  year={2022}
-}
-```
