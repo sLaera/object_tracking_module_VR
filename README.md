@@ -214,3 +214,153 @@ For datasets like tless, the number of a a specific object is unknown in the tes
 
 To use ICP for refinement, use `--use_icp True`
 
+
+# Training experiments zebra pose
+
+The aim of the experiments is to train the zebra pose model with the synthetic laryngoscope dataset.
+the dataset consists in 10000 images of the object in different light conditions and occlusions, with a random background image.
+
+the experiments consists on training the network starting from a pretrained checkpoint.
+
+the checkpoint used is the large_marker best score checkpoint of the ycbv dataset provided by the zebra pose developers.
+
+# First tests
+
+## Transfer learning
+
+This experiments consists on freezing the first layers of the network, training only the last ones.
+
+- 1/2 of layers frozen (red)
+- 2/3 of layers frozen (blue)
+
+![Untitled](Untitled.png)
+
+![Untitled](Untitled%201.png)
+
+Even dough the red chart misses the central part it is clear that both of the tests had a very similar results in term of losses.
+
+The qualitative results are that the segmentation works really well but the positions and rotations are not correct (the error shows that the predicted results doesn’t really get bette rover time).
+
+## Training on pretrained model
+
+This experiments consists on starting from the pretrained model without freezing the layer.
+
+the qualitative results and the corrisponding charts are similar. But the loss is in general lower than the transfer learning one 
+
+![Untitled](Untitled%202.png)
+
+![Untitled](Untitled%203.png)
+
+### Example of expected error chart
+
+![Untitled](Untitled%204.png)
+
+### Possible problems
+
+- The generated GT labels aren’t correct (the script to generate them was completely recreated from scratch)
+- The pretrained model is interfering with the learning of the correct features
+
+# Second tests
+
+## Fixing the GT and new error calculation
+
+The GT labels were generated using Blender. For some reason Blender added a random pattern of 1,1,1 pixel in the part of the image that should be black. Due to the fact that each pixel represent a specific code, this can create errors in the losses.
+
+Label without the fix:
+
+![Untitled](Untitled%205.png)
+
+Label with the fix:
+
+![Untitled](Untitled%206.png)
+
+The script that generate this labels is modified to make all this pixels black.
+
+The next tests where conducted with this new fix.
+
+Furthermore a new error is computed based on the mean square error of the raw rotation and translations data collected during tests and training
+
+### Train on single image
+
+The goal of this tests is to understand if the model  can actually fit on a single image.
+
+below the chart of the error of raw rotation and translation data
+
+![Untitled](Untitled%207.png)
+
+With a few iteration steps the model can predict the pose of the object quite well.
+
+Also the ADD error chart indicates that the model can fit on a single image
+
+![Untitled](Untitled%208.png)
+
+### Train on the entire dataset
+
+Two test were conducted on the entire dataset:
+
+- No pretrained weights
+    - adi error
+        
+        ![Untitled](Untitled%209.png)
+        
+    - raw errors on rotations and translations
+    
+    ![Untitled](Untitled%2010.png)
+    
+    the adi error and the error on the translation are really high. This means that most of the time the model can’t actually predict a solution at all.
+    
+- With pretrained weights and freezing 0.67 of the network
+    - adi error
+        
+        ![Untitled](Untitled%2011.png)
+        
+    - raw errors on rotations and translations
+        
+        ![Untitled](Untitled%2012.png)
+        
+        the results are similar to the previous ones
+        
+
+# Third test
+
+## Fixing the GT
+
+The GT images were rendered using Blender, for some reason Blender add noise to the image messing up the colors of the generated GT.
+
+A new python script was created. Open3d was used as a renderer.
+
+## Fixing the CAD Model
+
+As a comparison to the model provided by the paper the CAD model that was used had too many polygons. Rremesh and the decimate modifier of Blender are used to create a new model with a simpler geometry. Using sculpture mode to refine some areas and to add geometry to others.
+
+Running the training with the new GT on the old dataset generate bad results. So probably the images are too complex for the model to detect a correct position and translation
+
+### Training 100 images
+
+A new dataset was created. It is composed of 100 images of the laryngoscope with a low amount of colluders and a white background.
+
+After 23K steps a clear sign of overfitting was emerging. In fact the error is quite low on the train but a bit high on the test
+
+- Train
+
+![Untitled](Untitled%2013.png)
+
+- Test
+
+![Untitled](Untitled%2014.png)
+
+### Training 1000 images
+
+A new dataset was generated creating 1000 images with a changing background and more colluders
+
+The results are good, with an high error on the translation.
+
+The training probably suffer of underfitting (high bias) probably due to the small dataset
+
+- Test
+    
+    ![Untitled](Untitled%2015.png)
+    
+- Train
+    
+    ![Untitled](Untitled%2016.png)
