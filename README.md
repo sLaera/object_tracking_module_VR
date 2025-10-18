@@ -1,5 +1,7 @@
 # Zebra Pose
 
+This project is based on the Zebra Pose model
+
 [https://arxiv.org/abs/2203.09418](https://arxiv.org/abs/2203.09418)
 
 code:[https://github.com/suyz526/ZebraPose?tab=readme-ov-file](https://github.com/suyz526/ZebraPose?tab=readme-ov-file)
@@ -11,6 +13,11 @@ In order to make the solution works on a windows machine with numpy > 1.21 some 
 The biggest one is the replace of float and int value type that are deprecated on the newer version of numpy.
 
 Some other minor modifications where made to make sure the scripts works correctly with the provided configuration. Some of them consist of handle edge cases in case of path with spaces
+
+## Demo
+
+![Demo (2)](https://github.com/user-attachments/assets/f2a3d88c-438c-40a4-9a74-be889b081451)
+
 
 ### Library installations
 
